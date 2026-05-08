@@ -1,0 +1,70 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: multica-route
+  namespace: multica
+spec:
+  parentRefs:
+    - name: laravel-gateway
+      namespace: laravel-app
+      sectionName: https
+  hostnames:
+    - ai.licodes.net
+  rules:
+    # Backend: API + auth + websocket + health
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: multica-backend
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /auth
+      backendRefs:
+        - name: multica-backend
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws
+      backendRefs:
+        - name: multica-backend
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /health
+      backendRefs:
+        - name: multica-backend
+          port: 8080
+    # Frontend: catch-all
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: multica-web
+          port: 3000
+---
+# HTTP -> HTTPS redirect on the same gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: multica-route-redirect
+  namespace: multica
+spec:
+  parentRefs:
+    - name: laravel-gateway
+      namespace: laravel-app
+      sectionName: http
+  hostnames:
+    - ai.licodes.net
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

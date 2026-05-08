@@ -1,0 +1,88 @@
+# Cloud Build pipeline for Multica self-host (LifeCOM).
+# Triggered by GitHub push to main-lifecom on EricSu-Work/multica.
+#
+# Builds two images and pushes to Artifact Registry:
+#   asia-east1-docker.pkg.dev/lifeerp/multica/multica-backend:<sha> + :latest
+#   asia-east1-docker.pkg.dev/lifeerp/multica/multica-web:<sha>     + :latest
+#
+# Deploy step rolls the two Deployments in the multica ns.
+
+substitutions:
+  _REGION: asia-east1
+  _CLUSTER: lifecom-standard
+  _REPO: multica
+  _NS: multica
+
+steps:
+  # 1. Build backend
+  - id: build-backend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-backend:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-backend:latest
+      - .
+    waitFor: ['-']
+
+  # 2. Build frontend
+  - id: build-web
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.web
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-web:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-web:latest
+      - .
+    waitFor: ['-']
+
+  # 3. Push backend
+  - id: push-backend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-backend
+    waitFor: ['build-backend']
+
+  # 4. Push frontend
+  - id: push-web
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-web
+    waitFor: ['build-web']
+
+  # 5. Roll the deployments (annotates pod-template to force new pull of :latest).
+  #    Manifests are applied separately via kubectl in the bootstrap step;
+  #    this stage just rolls so the new image gets pulled.
+  - id: rollout
+    name: gcr.io/cloud-builders/kubectl
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args:
+      - -n
+      - ${_NS}
+      - rollout
+      - restart
+      - deployment/multica-backend
+      - deployment/multica-web
+    waitFor: ['push-backend', 'push-web']
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-backend:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/multica-web:$SHORT_SHA
