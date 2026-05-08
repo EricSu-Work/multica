@@ -384,7 +384,14 @@ UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
+    LEFT JOIN issue i ON atq.issue_id = i.id
+    LEFT JOIN issue parent ON i.parent_issue_id = parent.id
     WHERE atq.agent_id = $1 AND atq.status = 'queued'
+      AND (
+        atq.issue_id IS NULL
+        OR i.parent_issue_id IS NULL
+        OR parent.status IN ('done', 'cancelled')
+      )
       AND NOT EXISTS (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
@@ -418,6 +425,10 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 // "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
 // otherwise a user mashing the create button could fire concurrent quick-creates
 // whose completion lookup would race over "most recent issue by this agent".
+//
+// Also enforces parent-child issue dependencies (#970): a task whose issue
+// has a parent in todo/in_progress/in_review/blocked is skipped so children
+// don't start until the parent is done or cancelled.
 func (q *Queries) ClaimAgentTask(ctx context.Context, agentID pgtype.UUID) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, claimAgentTask, agentID)
 	var i AgentTaskQueue
@@ -1440,11 +1451,25 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 }
 
 const listPendingTasksByRuntime = `-- name: ListPendingTasksByRuntime :many
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session FROM agent_task_queue
-WHERE runtime_id = $1 AND status IN ('queued', 'dispatched')
-ORDER BY priority DESC, created_at ASC
+SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.chat_session_id, atq.autopilot_run_id, atq.attempt, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session
+FROM agent_task_queue atq
+LEFT JOIN issue i ON atq.issue_id = i.id
+LEFT JOIN issue parent ON i.parent_issue_id = parent.id
+WHERE atq.runtime_id = $1
+  AND atq.status IN ('queued', 'dispatched')
+  AND (
+    atq.issue_id IS NULL
+    OR i.parent_issue_id IS NULL
+    OR parent.status IN ('done', 'cancelled')
+  )
+ORDER BY atq.priority DESC, atq.created_at ASC
 `
 
+// Returns queued/dispatched tasks for a runtime that are ready to run.
+// Parent-child dependencies are enforced here (#970): a task whose issue has
+// a parent in todo/in_progress/in_review/blocked is excluded, so children
+// don't execute in parallel with an incomplete parent. Chat tasks (no
+// issue_id) and top-level issues (no parent_issue_id) are always eligible.
 func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtype.UUID) ([]AgentTaskQueue, error) {
 	rows, err := q.db.Query(ctx, listPendingTasksByRuntime, runtimeID)
 	if err != nil {
