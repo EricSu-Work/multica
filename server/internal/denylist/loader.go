@@ -78,6 +78,12 @@ func compileMaybe(pattern string, ci bool) (*regexp.Regexp, error) {
 // Watch loads the YAML at path and starts a goroutine that reloads it on
 // file modification (fsnotify Write|Create). Returns the engine and a
 // stop function for graceful shutdown.
+//
+// Degraded mode: if Load(path) succeeds but fsnotify setup fails, Watch
+// returns a non-nil error alongside a valid (static) engine and a no-op
+// stop function. The engine is safe to use; only hot-reload is missing.
+// Callers that require hot-reload MUST treat a non-nil error as fatal.
+// Callers that tolerate static rules may log the error and continue.
 func Watch(path string) (*Engine, func() error, error) {
 	initial, err := Load(path)
 	if err != nil {
