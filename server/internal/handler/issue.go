@@ -914,9 +914,8 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 				)...,
 			)
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error":     "deny-list rejected",
-				"rule_code": v.RuleCode,
-				"reason":    v.Reason,
+				"code":   v.RuleCode,
+				"reason": v.Reason,
 			})
 			return
 		}
@@ -1204,9 +1203,8 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 				)...,
 			)
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error":     "deny-list rejected",
-				"rule_code": v.RuleCode,
-				"reason":    v.Reason,
+				"code":   v.RuleCode,
+				"reason": v.Reason,
 			})
 			return
 		}
@@ -2189,14 +2187,14 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
-// truncateForLog returns s clipped to n bytes, appending an ellipsis when
-// truncation occurred. Used by the deny-list path to keep title/prompt
-// previews bounded in structured logs — full payloads can be megabytes
-// after frontend rich-text expansion and would blow out aggregation
-// budgets if logged verbatim.
+// truncateForLog returns s truncated to at most n runes, with an ellipsis
+// suffix if truncation occurred. Operates on runes (not bytes) so multi-
+// byte characters (CJK, emoji) are not split mid-codepoint, which would
+// otherwise produce invalid UTF-8 in slog output.
 func truncateForLog(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(runes[:n]) + "…"
 }

@@ -63,8 +63,8 @@ func TestCreateIssue_DenyList_Rejects422(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("body not JSON: %v", err)
 	}
-	if out["rule_code"] != "TEST_BITBUCKET" {
-		t.Fatalf("rule_code=%v want TEST_BITBUCKET", out["rule_code"])
+	if out["code"] != "TEST_BITBUCKET" {
+		t.Fatalf("code=%v want TEST_BITBUCKET", out["code"])
 	}
 }
 
