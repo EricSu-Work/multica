@@ -1,0 +1,11 @@
+schema_version: 1
+rules:
+  - code: EMAIL_BITBUCKET_NOTIFICATION
+    description: Bitbucket repository notification
+    title_pattern: '\[Bitbucket\]|回复\s*[:：]\s*\[Bitbucket\]|Re\s*:\s*\[Bitbucket\]'
+    case_insensitive: true
+
+  - code: EMAIL_NOREPLY_SENDER
+    description: noreply / system sender
+    description_pattern: '\b(?:noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster)@'
+    case_insensitive: true
