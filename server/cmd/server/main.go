@@ -13,6 +13,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/denylist"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -283,11 +284,31 @@ func main() {
 	// shutdown so any pending bumps are flushed before we exit.
 	heartbeatScheduler := handler.NewBatchedHeartbeatScheduler(queries, handler.DefaultHeartbeatBatchInterval)
 
+	// Plan I — issue deny-list filter. Enabled when MULTICA_DENYLIST_CONFIG
+	// points at a readable rules YAML; absent / unreadable means the filter
+	// is disabled and CreateIssue / QuickCreateIssue behave as before.
+	// fsnotify hot-reload is set up by Watch; we stop it during graceful
+	// shutdown alongside the other background workers.
+	var denyEngine *denylist.Engine
+	var denyStop func() error
+	if path := os.Getenv("MULTICA_DENYLIST_CONFIG"); path != "" {
+		engine, stop, err := denylist.Watch(path)
+		if err != nil {
+			slog.Error("denylist: init failed (continuing without filter)", "err", err)
+		}
+		if engine != nil {
+			denyEngine = engine
+			denyStop = stop
+			slog.Info("denylist: filter enabled", "path", path)
+		}
+	}
+
 	r := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
 		HTTPMetrics:        httpMetrics,
 		DaemonHub:          daemonHub,
 		DaemonWakeup:       daemonWakeup,
 		HeartbeatScheduler: heartbeatScheduler,
+		DenyList:           denyEngine,
 	})
 
 	srv := &http.Server{
@@ -358,6 +379,14 @@ func main() {
 	// final batch of queued heartbeat bumps.
 	sweepCancel()
 	heartbeatScheduler.Stop()
+
+	// Stop the deny-list fsnotify watcher (no-op when filter is disabled
+	// or running in static-fallback mode after a watcher setup failure).
+	if denyStop != nil {
+		if err := denyStop(); err != nil {
+			slog.Warn("denylist: stop failed", "error", err)
+		}
+	}
 
 	if metricsServer != nil {
 		metricsShutdownCtx, metricsShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
