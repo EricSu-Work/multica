@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/denylist"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -893,6 +894,34 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan I — deny-list filter (nil engine = disabled). Quick-create
+	// has no Title/Description split; the prompt fills the title slot
+	// and Description is left empty. AssigneeType is always "agent" or
+	// "squad" by construction (one is required above), but we don't
+	// pass that because deny-list rules currently only evaluate against
+	// Title/Description (AssigneeType is reserved for future rules).
+	if h.denyList != nil {
+		v := h.denyList.Evaluate(denylist.Input{
+			Title:       prompt,
+			Description: "",
+		})
+		if v.Blocked {
+			slog.Info("denylist: rejected quick-create",
+				append(logger.RequestAttrs(r),
+					"rule_code", v.RuleCode,
+					"reason", v.Reason,
+					"prompt_preview", truncateForLog(prompt, 100),
+				)...,
+			)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error":     "deny-list rejected",
+				"rule_code": v.RuleCode,
+				"reason":    v.Reason,
+			})
+			return
+		}
+	}
+
 	hasAgent := strings.TrimSpace(req.AgentID) != ""
 	hasSquad := strings.TrimSpace(req.SquadID) != ""
 	if hasAgent == hasSquad {
@@ -1147,6 +1176,40 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if req.Title == "" {
 		writeError(w, http.StatusBadRequest, "title is required")
 		return
+	}
+
+	// Plan I — deny-list filter (nil engine = disabled). Runs before
+	// workspace / auth resolution so machine-generated noise gets dropped
+	// with a stable 422 + rule_code before touching the DB.
+	if h.denyList != nil {
+		description := ""
+		if req.Description != nil {
+			description = *req.Description
+		}
+		assigneeType := ""
+		if req.AssigneeType != nil {
+			assigneeType = *req.AssigneeType
+		}
+		v := h.denyList.Evaluate(denylist.Input{
+			Title:        req.Title,
+			Description:  description,
+			AssigneeType: assigneeType,
+		})
+		if v.Blocked {
+			slog.Info("denylist: rejected issue create",
+				append(logger.RequestAttrs(r),
+					"rule_code", v.RuleCode,
+					"reason", v.Reason,
+					"title_preview", truncateForLog(req.Title, 100),
+				)...,
+			)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error":     "deny-list rejected",
+				"rule_code": v.RuleCode,
+				"reason":    v.Reason,
+			})
+			return
+		}
 	}
 
 	workspaceID := h.resolveWorkspaceID(r)
@@ -2124,4 +2187,16 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+// truncateForLog returns s clipped to n bytes, appending an ellipsis when
+// truncation occurred. Used by the deny-list path to keep title/prompt
+// previews bounded in structured logs — full payloads can be megabytes
+// after frontend rich-text expansion and would blow out aggregation
+// budgets if logged verbatim.
+func truncateForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
