@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/denylist"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -71,9 +72,14 @@ type Handler struct {
 	PATCache              *auth.PATCache
 	DaemonTokenCache      *auth.DaemonTokenCache
 	cfg                   Config
+	// denyList is consulted by CreateIssue / QuickCreateIssue to drop
+	// machine-generated noise before it lands in inboxes. nil means the
+	// filter is disabled — Handler is constructed that way in unit tests
+	// and in environments that don't set MULTICA_DENYLIST_CONFIG.
+	denyList *denylist.Engine
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
+func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, denyList *denylist.Engine, daemonHubs ...*daemonws.Hub) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -109,6 +115,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		CFSigner:              cfSigner,
 		Analytics:             analyticsClient,
 		cfg:                   cfg,
+		denyList:              denyList,
 	}
 }
 
