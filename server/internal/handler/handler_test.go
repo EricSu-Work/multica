@@ -41,12 +41,25 @@ func TestMain(m *testing.M) {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}
 
+	// Opt-in escape hatch for DB-independent unit tests (Plan I deny-list
+	// wire-up): when MULTICA_HANDLER_TEST_NO_DB=1, run m.Run() without DB
+	// fixture setup. Callers MUST scope with -run to a test set that does
+	// not touch testPool/testHandler, since those globals stay nil.
+	noDB := os.Getenv("MULTICA_HANDLER_TEST_NO_DB") == "1"
+
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
+		if noDB {
+			os.Exit(m.Run())
+		}
 		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
 		os.Exit(0)
 	}
 	if err := pool.Ping(ctx); err != nil {
+		if noDB {
+			pool.Close()
+			os.Exit(m.Run())
+		}
 		fmt.Printf("Skipping tests: database not reachable: %v\n", err)
 		pool.Close()
 		os.Exit(0)
@@ -57,7 +70,7 @@ func TestMain(m *testing.M) {
 	go hub.Run()
 	bus := events.New()
 	emailSvc := service.NewEmailService()
-	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
+	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true}, nil)
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
